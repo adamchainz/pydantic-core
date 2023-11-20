@@ -38,7 +38,7 @@ pub use serializers::{
 pub use validators::{validate_core_schema, PySome, SchemaValidator};
 
 #[pyfunction(signature = (data, *, allow_inf_nan=true))]
-pub fn from_json(py: Python, data: &PyAny, allow_inf_nan: bool) -> PyResult<PyObject> {
+pub fn from_json<'py>(py: Python<'py>, data: &PyAny, allow_inf_nan: bool) -> PyResult<Py2<'py, PyAny>> {
     if let Ok(py_bytes) = data.downcast::<PyBytes>() {
         jiter::python_parse(py, py_bytes.as_bytes(), allow_inf_nan)
     } else if let Ok(py_str) = data.downcast::<PyString>() {
