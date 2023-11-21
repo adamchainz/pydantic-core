@@ -27,7 +27,7 @@ use crate::tools::py_err;
 use crate::validators::{CombinedValidator, Exactness, ValidationState, Validator};
 
 use super::input_string::StringMapping;
-use super::{py_error_on_minusone, Input};
+use super::{py_error_on_minusone, BorrowInput, Input};
 
 pub struct ValidationMatch<T>(T, Exactness);
 
@@ -67,7 +67,7 @@ impl<T> ValidationMatch<T> {
 /// This mostly matches python's definition of `Collection`.
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum GenericIterable<'a> {
-    List(&'a PyList),
+    List(Py2<'a, PyList>),
     Tuple(&'a PyTuple),
     Set(&'a PySet),
     FrozenSet(&'a PyFrozenSet),
@@ -92,33 +92,37 @@ impl<'a, 'py: 'a> GenericIterable<'a> {
     pub fn as_sequence_iterator(
         &self,
         py: Python<'py>,
-    ) -> PyResult<Box<dyn Iterator<Item = PyResult<&'a PyAny>> + 'a>> {
+    ) -> PyResult<Box<dyn Iterator<Item = PyResult<Py2<'a, PyAny>>> + 'a>> {
         match self {
-            GenericIterable::List(iter) => Ok(Box::new(iter.iter().map(Ok))),
-            GenericIterable::Tuple(iter) => Ok(Box::new(iter.iter().map(Ok))),
-            GenericIterable::Set(iter) => Ok(Box::new(iter.iter().map(Ok))),
-            GenericIterable::FrozenSet(iter) => Ok(Box::new(iter.iter().map(Ok))),
+            GenericIterable::List(iter) => Ok(Box::new(iter.clone().into_iter().map(Ok))),
+            GenericIterable::Tuple(iter) => Ok(Box::new(iter.iter().map(Ok).map(pyresult_ref_to_pyresult_py2))),
+            GenericIterable::Set(iter) => Ok(Box::new(iter.iter().map(Ok).map(pyresult_ref_to_pyresult_py2))),
+            GenericIterable::FrozenSet(iter) => Ok(Box::new(iter.iter().map(Ok).map(pyresult_ref_to_pyresult_py2))),
             // Note that this iterates over only the keys, just like doing iter({}) in Python
-            GenericIterable::Dict(iter) => Ok(Box::new(iter.iter().map(|(k, _)| Ok(k)))),
-            GenericIterable::DictKeys(iter) => Ok(Box::new(iter.iter()?)),
-            GenericIterable::DictValues(iter) => Ok(Box::new(iter.iter()?)),
-            GenericIterable::DictItems(iter) => Ok(Box::new(iter.iter()?)),
+            GenericIterable::Dict(iter) => Ok(Box::new(
+                iter.iter().map(|(k, _)| Ok(k)).map(pyresult_ref_to_pyresult_py2),
+            )),
+            GenericIterable::DictKeys(iter) => Ok(Box::new(iter.iter()?.map(pyresult_ref_to_pyresult_py2))),
+            GenericIterable::DictValues(iter) => Ok(Box::new(iter.iter()?.map(pyresult_ref_to_pyresult_py2))),
+            GenericIterable::DictItems(iter) => Ok(Box::new(iter.iter()?.map(pyresult_ref_to_pyresult_py2))),
             // Note that this iterates over only the keys, just like doing iter({}) in Python
-            GenericIterable::Mapping(iter) => Ok(Box::new(iter.keys()?.iter()?)),
-            GenericIterable::PyString(iter) => Ok(Box::new(iter.iter()?)),
-            GenericIterable::Bytes(iter) => Ok(Box::new(iter.iter()?)),
-            GenericIterable::PyByteArray(iter) => Ok(Box::new(iter.iter()?)),
-            GenericIterable::Sequence(iter) => Ok(Box::new(iter.iter()?)),
-            GenericIterable::Iterator(iter) => Ok(Box::new(iter.iter()?)),
+            GenericIterable::Mapping(iter) => Ok(Box::new(iter.keys()?.iter()?.map(pyresult_ref_to_pyresult_py2))),
+            GenericIterable::PyString(iter) => Ok(Box::new(iter.iter()?.map(pyresult_ref_to_pyresult_py2))),
+            GenericIterable::Bytes(iter) => Ok(Box::new(iter.iter()?.map(pyresult_ref_to_pyresult_py2))),
+            GenericIterable::PyByteArray(iter) => Ok(Box::new(iter.iter()?.map(pyresult_ref_to_pyresult_py2))),
+            GenericIterable::Sequence(iter) => Ok(Box::new(iter.iter()?.map(pyresult_ref_to_pyresult_py2))),
+            GenericIterable::Iterator(iter) => Ok(Box::new(iter.iter()?.map(pyresult_ref_to_pyresult_py2))),
             GenericIterable::JsonArray(iter) => Ok(Box::new(iter.iter().map(move |v| {
-                let v = v.to_object(py);
-                Ok(v.into_ref(py))
+                let v = v.to_object(py).attach_into(py);
+                Ok(v)
             }))),
             // Note that this iterates over only the keys, just like doing iter({}) in Python, just for consistency
             GenericIterable::JsonObject(iter) => Ok(Box::new(
-                iter.iter().map(move |(k, _)| Ok(k.to_object(py).into_ref(py))),
+                iter.iter().map(move |(k, _)| Ok(k.to_object(py).attach_into(py))),
             )),
-            GenericIterable::JsonString(s) => Ok(Box::new(PyString::new(py, s).iter()?)),
+            GenericIterable::JsonString(s) => {
+                Ok(Box::new(PyString::new(py, s).iter()?.map(pyresult_ref_to_pyresult_py2)))
+            }
         }
     }
 }
@@ -188,7 +192,7 @@ macro_rules! any_next_error {
 #[allow(clippy::too_many_arguments)]
 fn validate_iter_to_vec<'a, 's>(
     py: Python<'a>,
-    iter: impl Iterator<Item = PyResult<&'a (impl Input<'a> + 'a)>>,
+    iter: impl Iterator<Item = PyResult<impl BorrowInput + 'a>>,
     capacity: usize,
     mut max_length_check: MaxLengthCheck<'a, impl Input<'a>>,
     validator: &'s CombinedValidator,
@@ -198,7 +202,7 @@ fn validate_iter_to_vec<'a, 's>(
     let mut errors: Vec<ValLineError> = Vec::new();
     for (index, item_result) in iter.enumerate() {
         let item = item_result.map_err(|e| any_next_error!(py, e, max_length_check.input, index))?;
-        match validator.validate(py, item, state) {
+        match validator.validate(py, item.borrow_input(), state) {
             Ok(item) => {
                 max_length_check.incr()?;
                 output.push(item);
@@ -253,7 +257,7 @@ impl BuildSet for &PyFrozenSet {
 fn validate_iter_to_set<'a, 's>(
     py: Python<'a>,
     set: impl BuildSet,
-    iter: impl Iterator<Item = PyResult<&'a (impl Input<'a> + 'a)>>,
+    iter: impl Iterator<Item = PyResult<impl BorrowInput + 'a>>,
     input: &'a (impl Input<'a> + 'a),
     field_type: &'static str,
     max_length: Option<usize>,
@@ -263,7 +267,7 @@ fn validate_iter_to_set<'a, 's>(
     let mut errors: Vec<ValLineError> = Vec::new();
     for (index, item_result) in iter.enumerate() {
         let item = item_result.map_err(|e| any_next_error!(py, e, input, index))?;
-        match validator.validate(py, item, state) {
+        match validator.validate(py, item.borrow_input(), state) {
             Ok(item) => {
                 set.build_add(item)?;
                 if let Some(max_length) = max_length {
@@ -301,14 +305,14 @@ fn validate_iter_to_set<'a, 's>(
 fn no_validator_iter_to_vec<'a, 's>(
     py: Python<'a>,
     input: &'a (impl Input<'a> + 'a),
-    iter: impl Iterator<Item = PyResult<&'a (impl Input<'a> + 'a)>>,
+    iter: impl Iterator<Item = PyResult<impl BorrowInput + 'a>>,
     mut max_length_check: MaxLengthCheck<'a, impl Input<'a>>,
 ) -> ValResult<Vec<PyObject>> {
     iter.enumerate()
         .map(|(index, result)| {
             let v = result.map_err(|e| any_next_error!(py, e, input, index))?;
             max_length_check.incr()?;
-            Ok(v.to_object(py))
+            Ok(v.borrow_input().to_object(py))
         })
         .collect()
 }
@@ -360,7 +364,7 @@ impl<'a> GenericIterable<'a> {
         }
 
         match self {
-            GenericIterable::List(collection) => validate!(collection.iter().map(Ok)),
+            GenericIterable::List(collection) => validate!(collection.clone().into_iter().map(Ok)),
             GenericIterable::Tuple(collection) => validate!(collection.iter().map(Ok)),
             GenericIterable::Set(collection) => validate!(collection.iter().map(Ok)),
             GenericIterable::FrozenSet(collection) => validate!(collection.iter().map(Ok)),
@@ -389,7 +393,7 @@ impl<'a> GenericIterable<'a> {
         }
 
         match self {
-            GenericIterable::List(collection) => validate_set!(collection.iter().map(Ok)),
+            GenericIterable::List(collection) => validate_set!(collection.clone().into_iter().map(Ok)),
             GenericIterable::Tuple(collection) => validate_set!(collection.iter().map(Ok)),
             GenericIterable::Set(collection) => validate_set!(collection.iter().map(Ok)),
             GenericIterable::FrozenSet(collection) => validate_set!(collection.iter().map(Ok)),
@@ -412,7 +416,7 @@ impl<'a> GenericIterable<'a> {
 
         match self {
             GenericIterable::List(collection) => {
-                no_validator_iter_to_vec(py, input, collection.iter().map(Ok), max_length_check)
+                no_validator_iter_to_vec(py, input, collection.clone().into_iter().map(Ok), max_length_check)
             }
             GenericIterable::Tuple(collection) => {
                 no_validator_iter_to_vec(py, input, collection.iter().map(Ok), max_length_check)
@@ -1038,4 +1042,9 @@ impl ToPyObject for Int {
             Self::Big(big_i) => big_i.to_object(py),
         }
     }
+}
+
+/// Backwards-compatibility helper while migrating PyO3 API
+fn pyresult_ref_to_pyresult_py2(result: PyResult<&'_ PyAny>) -> PyResult<Py2<'_, PyAny>> {
+    result.map(|any| Py2::borrowed_from_gil_ref(&any).clone())
 }

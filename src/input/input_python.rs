@@ -566,7 +566,7 @@ impl<'a> Input<'a> for PyAny {
     fn extract_generic_iterable(&'a self) -> ValResult<GenericIterable<'a>> {
         // Handle concrete non-overlapping types first, then abstract types
         if let Ok(iterable) = self.downcast::<PyList>() {
-            Ok(GenericIterable::List(iterable))
+            Ok(GenericIterable::List(Py2::borrowed_from_gil_ref(&iterable).clone()))
         } else if let Ok(iterable) = self.downcast::<PyTuple>() {
             Ok(GenericIterable::Tuple(iterable))
         } else if let Ok(iterable) = self.downcast::<PySet>() {
@@ -743,6 +743,13 @@ impl BorrowInput for &'_ PyAny {
     type Input<'a> = PyAny where Self: 'a;
     fn borrow_input(&self) -> &Self::Input<'_> {
         self
+    }
+}
+
+impl BorrowInput for Py2<'_, PyAny> {
+    type Input<'a> = PyAny where Self: 'a;
+    fn borrow_input(&self) -> &Self::Input<'_> {
+        self.as_gil_ref()
     }
 }
 
