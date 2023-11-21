@@ -761,7 +761,7 @@ impl<'a> Input<'a> for Py2<'a, PyAny> {
 
     fn input_is_instance(&self, class: &PyType) -> Option<&PyAny> {
         if self.is_instance(Py2::borrowed_from_gil_ref(&&**class)).unwrap_or(false) {
-            Some(self.clone().into_gil_ref())
+            Some(self.as_gil_ref())
         } else {
             None
         }

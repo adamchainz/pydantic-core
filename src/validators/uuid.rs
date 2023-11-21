@@ -22,13 +22,13 @@ const UUID_IS_SAFE: &str = "is_safe";
 static UUID_TYPE: GILOnceCell<Py<PyType>> = GILOnceCell::new();
 
 fn import_type(py: Python, module: &str, attr: &str) -> PyResult<Py<PyType>> {
-    py.import(module)?.getattr(attr)?.extract()
+    py.import2(module)?.getattr(attr)?.extract()
 }
 
-fn get_uuid_type(py: Python) -> PyResult<&PyType> {
+fn get_uuid_type(py: Python) -> PyResult<&Py2<'_, PyType>> {
     Ok(UUID_TYPE
         .get_or_init(py, || import_type(py, "uuid", "UUID").unwrap())
-        .as_ref(py))
+        .attach(py))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -92,7 +92,7 @@ impl Validator for UuidValidator {
         state: &mut ValidationState,
     ) -> ValResult<PyObject> {
         let class = get_uuid_type(py)?;
-        if let Some(py_input) = input.input_is_instance(class) {
+        if let Some(py_input) = input.input_is_instance(class.as_gil_ref()) {
             if let Some(expected_version) = self.version {
                 let py_input_version: Option<usize> = py_input.getattr(intern!(py, "version"))?.extract()?;
                 if !match py_input_version {
@@ -125,7 +125,7 @@ impl Validator for UuidValidator {
                 state.floor_exactness(Exactness::Lax);
             }
             let uuid = self.get_uuid(input)?;
-            self.create_py_uuid(py, class, &uuid)
+            self.create_py_uuid(class, &uuid)
         }
     }
 
@@ -198,8 +198,9 @@ impl UuidValidator {
     ///
     /// This implementation does not use the Python `__init__` function to speed up the process,
     /// as the `__init__` function in the Python `uuid` module performs extensive checks.
-    fn create_py_uuid(&self, py: Python<'_>, py_type: &PyType, uuid: &Uuid) -> ValResult<Py<PyAny>> {
-        let class = create_class(py_type)?;
+    fn create_py_uuid(&self, py_type: &Py2<'_, PyType>, uuid: &Uuid) -> ValResult<Py<PyAny>> {
+        let py = py_type.py();
+        let class = create_class(py_type.as_gil_ref())?;
         let dc = class.as_ref(py);
         let int = uuid.as_u128();
         let safe = py
