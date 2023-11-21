@@ -281,9 +281,6 @@ impl Validator for DataclassArgsValidator {
                         if let Some(kwargs) = $args.kwargs {
                             if kwargs.len() != used_keys.len() {
                                 for (raw_key, value) in kwargs.iter() {
-                                    // FIXME workaround for Py2 not having input yet
-                                    let raw_key = raw_key.borrow_input();
-                                    let value = value.borrow_input();
                                     match raw_key.validate_str(true, false).map(ValidationMatch::into_inner) {
                                         Ok(either_str) => {
                                             if !used_keys.contains(either_str.as_cow()?.as_ref()) {
@@ -293,7 +290,7 @@ impl Validator for DataclassArgsValidator {
                                                         errors.push(
                                                             ValLineError::new_with_loc(
                                                                 ErrorTypeDefaults::UnexpectedKeywordArgument,
-                                                                value,
+                                                                value.borrow_input(),
                                                                 raw_key.as_loc_item(),
                                                             ),
                                                         );
@@ -301,7 +298,7 @@ impl Validator for DataclassArgsValidator {
                                                     ExtraBehavior::Ignore => {}
                                                     ExtraBehavior::Allow => {
                                                         if let Some(ref validator) = self.extras_validator {
-                                                            match validator.validate(py, value, state) {
+                                                            match validator.validate(py, value.borrow_input(), state) {
                                                                 Ok(value) => output_dict
                                                                     .set_item(either_str.as_py_string(py), value)?,
                                                                 Err(ValError::LineErrors(line_errors)) => {

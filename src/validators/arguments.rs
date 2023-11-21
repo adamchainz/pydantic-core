@@ -282,9 +282,6 @@ impl Validator for ArgumentsValidator {
                 if let Some(kwargs) = $args.kwargs {
                     if kwargs.len() > used_kwargs.len() {
                         for (raw_key, value) in kwargs.iter() {
-                            // FIXME workaround for Py2 not having input yet
-                            let raw_key = raw_key.borrow_input();
-                            let value = value.borrow_input();
                             let either_str = match raw_key.validate_str(true, false).map(ValidationMatch::into_inner) {
                                 Ok(k) => k,
                                 Err(ValError::LineErrors(line_errors)) => {
@@ -300,7 +297,7 @@ impl Validator for ArgumentsValidator {
                             };
                             if !used_kwargs.contains(either_str.as_cow()?.as_ref()) {
                                 match self.var_kwargs_validator {
-                                    Some(ref validator) => match validator.validate(py, value, state) {
+                                    Some(ref validator) => match validator.validate(py, value.borrow_input(), state) {
                                         Ok(value) => output_kwargs.set_item(either_str.as_py_string(py), value)?,
                                         Err(ValError::LineErrors(line_errors)) => {
                                             for err in line_errors {
@@ -312,7 +309,7 @@ impl Validator for ArgumentsValidator {
                                     None => {
                                         errors.push(ValLineError::new_with_loc(
                                             ErrorTypeDefaults::UnexpectedKeywordArgument,
-                                            value,
+                                            value.borrow_input(),
                                             raw_key.as_loc_item(),
                                         ));
                                     }
