@@ -1,6 +1,7 @@
 use pyo3::exceptions::PyKeyError;
 use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::types::PyMapping;
 use pyo3::types::{PyDict, PySet, PyString, PyType};
 
 use ahash::AHashSet;
@@ -150,8 +151,8 @@ impl Validator for ModelFieldsValidator {
             Err(err) => return Err(err),
         };
 
-        let model_dict = PyDict::new(py);
-        let mut model_extra_dict_op: Option<&PyDict> = None;
+        let model_dict = PyDict::new2(py);
+        let mut model_extra_dict_op: Option<Py2<PyDict>> = None;
         let mut errors: Vec<ValLineError> = Vec::with_capacity(self.fields.len());
         let mut fields_set_vec: Vec<Py<PyString>> = Vec::with_capacity(self.fields.len());
 
@@ -173,9 +174,9 @@ impl Validator for ModelFieldsValidator {
         }
 
         macro_rules! process {
-            ($dict:ident, $get_method:ident, $iter:ty $(,$kwargs:ident)?) => {{
+            ($dict:expr, $get_method:ident, $iter:ty $(,$kwargs:expr)?) => {{
                 match state.with_new_extra(Extra {
-                    data: Some(model_dict),
+                    data: Some(model_dict.clone()),
                     ..*state.extra()
                 }, |state| {
                     for field in &self.fields {
@@ -248,7 +249,7 @@ impl Validator for ModelFieldsValidator {
                 }
 
                 if let Some(ref mut used_keys) = used_keys {
-                    let model_extra_dict = PyDict::new(py);
+                    let model_extra_dict = PyDict::new2(py);
                     for item_result in <$iter>::new($dict)? {
                         let (raw_key, value) = item_result?;
                         let either_str = match raw_key.validate_str(true, false).map(ValidationMatch::into_inner) {
@@ -313,22 +314,37 @@ impl Validator for ModelFieldsValidator {
             }};
         }
         match dict {
-            GenericMapping::PyDict(d) => process!(d, py_get_dict_item, DictGenericIterator),
-            GenericMapping::PyMapping(d) => process!(d, py_get_mapping_item, MappingGenericIterator),
-            GenericMapping::StringMapping(d) => process!(d, py_get_string_mapping_item, StringMappingGenericIterator),
-            GenericMapping::PyGetAttr(d, kwargs) => process!(d, py_get_attr, AttributesGenericIterator, kwargs),
+            GenericMapping::PyDict(d) => {
+                process!(Py2::borrowed_from_gil_ref(&d), py_get_dict_item, DictGenericIterator);
+            }
+            GenericMapping::PyMapping(d) => process!(
+                unsafe { Py2::borrowed_from_gil_ref(&&**d).downcast_unchecked::<PyMapping>() },
+                py_get_mapping_item,
+                MappingGenericIterator
+            ),
+            GenericMapping::StringMapping(d) => process!(
+                Py2::borrowed_from_gil_ref(&d),
+                py_get_string_mapping_item,
+                StringMappingGenericIterator
+            ),
+            GenericMapping::PyGetAttr(d, kwargs) => process!(
+                Py2::borrowed_from_gil_ref(&d),
+                py_get_attr,
+                AttributesGenericIterator,
+                kwargs.as_ref().map(Py2::borrowed_from_gil_ref)
+            ),
             GenericMapping::JsonObject(d) => process!(d, json_get, JsonObjectGenericIterator),
         }
 
         if !errors.is_empty() {
             Err(ValError::LineErrors(errors))
         } else {
-            let fields_set = PySet::new(py, &fields_set_vec)?;
+            let fields_set = PySet::new2(py, &fields_set_vec)?;
 
             // if we have extra=allow, but we didn't create a dict because we were validating
             // from attributes, set it now so __pydantic_extra__ is always a dict if extra=allow
             if matches!(self.extra_behavior, ExtraBehavior::Allow) && model_extra_dict_op.is_none() {
-                model_extra_dict_op = Some(PyDict::new(py));
+                model_extra_dict_op = Some(PyDict::new2(py));
             };
 
             Ok((model_dict, model_extra_dict_op, fields_set).to_object(py))
@@ -343,7 +359,7 @@ impl Validator for ModelFieldsValidator {
         field_value: &'data PyAny,
         state: &mut ValidationState,
     ) -> ValResult<PyObject> {
-        let dict: &PyDict = obj.downcast()?;
+        let dict = Py2::borrowed_from_gil_ref(&obj).downcast::<PyDict>()?;
 
         let get_updated_dict = |output: PyObject| {
             dict.set_item(field_name, output)?;
@@ -416,9 +432,9 @@ impl Validator for ModelFieldsValidator {
 
         let new_extra = match &self.extra_behavior {
             ExtraBehavior::Allow => {
-                let non_extra_data = PyDict::new(py);
+                let non_extra_data = PyDict::new2(py);
                 self.fields.iter().for_each(|f| {
-                    let popped_value = PyAny::get_item(new_data, &f.name).unwrap();
+                    let popped_value = PyAnyMethods::get_item(&**new_data, &f.name).unwrap();
                     new_data.del_item(&f.name).unwrap();
                     non_extra_data.set_item(&f.name, popped_value).unwrap();
                 });
@@ -430,7 +446,7 @@ impl Validator for ModelFieldsValidator {
             _ => py.None().into(),
         };
 
-        let fields_set: &PySet = PySet::new(py, &[field_name.to_string()])?;
+        let fields_set = PySet::new2(py, &[field_name.to_string()])?;
         Ok((new_data.to_object(py), new_extra, fields_set.to_object(py)).to_object(py))
     }
 

@@ -555,7 +555,7 @@ pub struct Extra<'a> {
     /// Validation mode
     pub input_type: InputType,
     /// This is used as the `data` kwargs to validator functions
-    pub data: Option<&'a PyDict>,
+    pub data: Option<Py2<'a, PyDict>>,
     /// whether we're in strict or lax mode
     pub strict: Option<bool>,
     /// Validation time setting of `from_attributes`
@@ -589,7 +589,7 @@ impl<'a> Extra<'a> {
     pub fn as_strict(&self) -> Self {
         Self {
             input_type: self.input_type,
-            data: self.data,
+            data: self.data.clone(),
             strict: Some(true),
             from_attributes: self.from_attributes,
             context: self.context,

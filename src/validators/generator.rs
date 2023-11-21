@@ -238,7 +238,7 @@ impl InternalValidator {
         Self {
             name: name.to_string(),
             validator,
-            data: extra.data.map(|d| d.into_py(py)),
+            data: extra.data.as_ref().map(|d| d.clone().into()),
             strict: extra.strict,
             from_attributes: extra.from_attributes,
             context: extra.context.map(|d| d.into_py(py)),
@@ -261,7 +261,7 @@ impl InternalValidator {
     ) -> PyResult<PyObject> {
         let extra = Extra {
             input_type: self.validation_mode,
-            data: self.data.as_ref().map(|data| data.as_ref(py)),
+            data: self.data.as_ref().map(|data| data.attach(py).clone()),
             strict: self.strict,
             from_attributes: self.from_attributes,
             context: self.context.as_ref().map(|data| data.as_ref(py)),
@@ -295,7 +295,7 @@ impl InternalValidator {
     ) -> PyResult<PyObject> {
         let extra = Extra {
             input_type: self.validation_mode,
-            data: self.data.as_ref().map(|data| data.as_ref(py)),
+            data: self.data.as_ref().map(|data| data.attach(py).clone()),
             strict: self.strict,
             from_attributes: self.from_attributes,
             context: self.context.as_ref().map(|data| data.as_ref(py)),

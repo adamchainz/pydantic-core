@@ -1,6 +1,7 @@
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use pyo3::types::PyMapping;
 
 use crate::build_tools::is_strict;
 use crate::errors::{AsLocItem, ValError, ValLineError, ValResult};
@@ -76,16 +77,29 @@ impl Validator for DictValidator {
         let strict = state.strict_or(self.strict);
         let dict = input.validate_dict(strict)?;
         match dict {
-            GenericMapping::PyDict(py_dict) => {
-                self.validate_generic_mapping(py, input, DictGenericIterator::new(py_dict)?, state)
-            }
+            GenericMapping::PyDict(py_dict) => self.validate_generic_mapping(
+                py,
+                input,
+                DictGenericIterator::new(Py2::borrowed_from_gil_ref(&py_dict))?,
+                state,
+            ),
             GenericMapping::PyMapping(mapping) => {
                 state.floor_exactness(super::Exactness::Lax);
-                self.validate_generic_mapping(py, input, MappingGenericIterator::new(mapping)?, state)
+                self.validate_generic_mapping(
+                    py,
+                    input,
+                    MappingGenericIterator::new(unsafe {
+                        Py2::borrowed_from_gil_ref(&&**mapping).downcast_unchecked::<PyMapping>()
+                    })?,
+                    state,
+                )
             }
-            GenericMapping::StringMapping(dict) => {
-                self.validate_generic_mapping(py, input, StringMappingGenericIterator::new(dict)?, state)
-            }
+            GenericMapping::StringMapping(dict) => self.validate_generic_mapping(
+                py,
+                input,
+                StringMappingGenericIterator::new(Py2::borrowed_from_gil_ref(&dict))?,
+                state,
+            ),
             GenericMapping::PyGetAttr(_, _) => unreachable!(),
             GenericMapping::JsonObject(json_object) => {
                 self.validate_generic_mapping(py, input, JsonObjectGenericIterator::new(json_object)?, state)

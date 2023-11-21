@@ -460,8 +460,10 @@ pub struct DictGenericIterator<'py> {
 }
 
 impl<'py> DictGenericIterator<'py> {
-    pub fn new(dict: &'py PyDict) -> ValResult<Self> {
-        Ok(Self { dict_iter: dict.iter() })
+    pub fn new(dict: &Py2<'py, PyDict>) -> ValResult<Self> {
+        Ok(Self {
+            dict_iter: dict.clone().into_gil_ref().iter(),
+        })
     }
 }
 
@@ -490,15 +492,18 @@ fn mapping_err<'py>(err: PyErr, py: Python<'py>, input: &'py impl Input<'py>) ->
 }
 
 impl<'py> MappingGenericIterator<'py> {
-    pub fn new(mapping: &'py PyMapping) -> ValResult<Self> {
+    pub fn new(mapping: &Py2<'py, PyMapping>) -> ValResult<Self> {
         let py = mapping.py();
-        let input: &PyAny = mapping;
+        let input: &PyAny = (**mapping).clone().into_gil_ref();
         let iter = mapping
             .items()
             .map_err(|e| mapping_err(e, py, input))?
             .iter()
             .map_err(|e| mapping_err(e, py, input))?;
-        Ok(Self { input, iter })
+        Ok(Self {
+            input,
+            iter: unsafe { mapping.py().from_owned_ptr(iter.into_ptr()) },
+        })
     }
 }
 
@@ -528,8 +533,10 @@ pub struct StringMappingGenericIterator<'py> {
 }
 
 impl<'py> StringMappingGenericIterator<'py> {
-    pub fn new(dict: &'py PyDict) -> ValResult<Self> {
-        Ok(Self { dict_iter: dict.iter() })
+    pub fn new(dict: &Py2<'py, PyDict>) -> ValResult<Self> {
+        Ok(Self {
+            dict_iter: dict.clone().into_gil_ref().iter(),
+        })
     }
 }
 
@@ -562,10 +569,11 @@ pub struct AttributesGenericIterator<'py> {
 }
 
 impl<'py> AttributesGenericIterator<'py> {
-    pub fn new(py_any: &'py PyAny) -> ValResult<Self> {
+    pub fn new(py_any: &Py2<'py, PyAny>) -> ValResult<Self> {
+        let attributes_iterator = py_any.dir().into_gil_ref().into_iter();
         Ok(Self {
-            object: py_any,
-            attributes_iterator: py_any.dir().into_iter(),
+            object: py_any.clone().into_gil_ref(),
+            attributes_iterator,
         })
     }
 }
@@ -713,14 +721,17 @@ impl GenericJsonIterator {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
-pub struct PyArgs<'a> {
-    pub args: Option<&'a PyTuple>,
-    pub kwargs: Option<&'a PyDict>,
+pub struct PyArgs<'py> {
+    pub args: Option<Py2<'py, PyTuple>>,
+    pub kwargs: Option<Py2<'py, PyDict>>,
 }
 
 impl<'a> PyArgs<'a> {
     pub fn new(args: Option<&'a PyTuple>, kwargs: Option<&'a PyDict>) -> Self {
-        Self { args, kwargs }
+        Self {
+            args: args.map(|args| Py2::borrowed_from_gil_ref(&args).clone()),
+            kwargs: kwargs.map(|kwargs| Py2::borrowed_from_gil_ref(&kwargs).clone()),
+        }
     }
 }
 

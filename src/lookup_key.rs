@@ -108,10 +108,10 @@ impl LookupKey {
         }
     }
 
-    pub fn py_get_dict_item<'data, 's>(
+    pub fn py_get_dict_item<'py, 's>(
         &'s self,
-        dict: &'data PyDict,
-    ) -> ValResult<Option<(&'s LookupPath, &'data PyAny)>> {
+        dict: &Py2<'py, PyDict>,
+    ) -> ValResult<Option<(&'s LookupPath, Py2<'py, PyAny>)>> {
         match self {
             Self::Simple { py_key, path, .. } => match dict.get_item(py_key)? {
                 Some(value) => Ok(Some((path, value))),
@@ -134,7 +134,7 @@ impl LookupKey {
                 for path in path_choices {
                     // iterate over the path and plug each value into the py_any from the last step, starting with dict
                     // this could just be a loop but should be somewhat faster with a functional design
-                    if let Some(v) = path.iter().try_fold(dict as &PyAny, |d, loc| loc.py_get_item(d)) {
+                    if let Some(v) = path.iter().try_fold((**dict).clone(), |d, loc| loc.py_get_item(&d)) {
                         // Successfully found an item, return it
                         return Ok(Some((path, v)));
                     }
@@ -145,22 +145,22 @@ impl LookupKey {
         }
     }
 
-    pub fn py_get_string_mapping_item<'data, 's>(
+    pub fn py_get_string_mapping_item<'py, 's>(
         &'s self,
-        dict: &'data PyDict,
-    ) -> ValResult<Option<(&'s LookupPath, StringMapping<'data>)>> {
+        dict: &Py2<'py, PyDict>,
+    ) -> ValResult<Option<(&'s LookupPath, StringMapping<'py>)>> {
         if let Some((path, py_any)) = self.py_get_dict_item(dict)? {
-            let value = StringMapping::new_value(py_any)?;
+            let value = StringMapping::new_value(py_any.into_gil_ref())?;
             Ok(Some((path, value)))
         } else {
             Ok(None)
         }
     }
 
-    pub fn py_get_mapping_item<'data, 's>(
+    pub fn py_get_mapping_item<'py, 's>(
         &'s self,
-        dict: &'data PyMapping,
-    ) -> ValResult<Option<(&'s LookupPath, &'data PyAny)>> {
+        dict: &Py2<'py, PyMapping>,
+    ) -> ValResult<Option<(&'s LookupPath, Py2<'py, PyAny>)>> {
         match self {
             Self::Simple { py_key, path, .. } => match dict.get_item(py_key) {
                 Ok(value) => Ok(Some((path, value))),
@@ -183,7 +183,7 @@ impl LookupKey {
                 for path in path_choices {
                     // iterate over the path and plug each value into the py_any from the last step, starting with dict
                     // this could just be a loop but should be somewhat faster with a functional design
-                    if let Some(v) = path.iter().try_fold(dict as &PyAny, |d, loc| loc.py_get_item(d)) {
+                    if let Some(v) = path.iter().try_fold((**dict).clone(), |d, loc| loc.py_get_item(&d)) {
                         // Successfully found an item, return it
                         return Ok(Some((path, v)));
                     }
@@ -194,28 +194,28 @@ impl LookupKey {
         }
     }
 
-    pub fn py_get_attr<'data, 's>(
+    pub fn py_get_attr<'py, 's>(
         &'s self,
-        obj: &'data PyAny,
-        kwargs: Option<&'data PyDict>,
-    ) -> ValResult<Option<(&'s LookupPath, &'data PyAny)>> {
+        obj: &Py2<'py, PyAny>,
+        kwargs: Option<&Py2<'py, PyDict>>,
+    ) -> ValResult<Option<(&'s LookupPath, Py2<'py, PyAny>)>> {
         match self._py_get_attr(obj, kwargs) {
             Ok(v) => Ok(v),
             Err(err) => {
                 let error = py_err_string(obj.py(), err);
                 Err(ValError::new(
                     ErrorType::GetAttributeError { error, context: None },
-                    obj,
+                    obj.as_gil_ref(),
                 ))
             }
         }
     }
 
-    pub fn _py_get_attr<'data, 's>(
+    pub fn _py_get_attr<'py, 's>(
         &'s self,
-        obj: &'data PyAny,
-        kwargs: Option<&'data PyDict>,
-    ) -> PyResult<Option<(&'s LookupPath, &'data PyAny)>> {
+        obj: &Py2<'py, PyAny>,
+        kwargs: Option<&Py2<'py, PyDict>>,
+    ) -> PyResult<Option<(&'s LookupPath, Py2<'py, PyAny>)>> {
         if let Some(dict) = kwargs {
             if let Ok(Some(item)) = self.py_get_dict_item(dict) {
                 return Ok(Some(item));
@@ -244,9 +244,9 @@ impl LookupKey {
                 'outer: for path in path_choices {
                     // similar to above, but using `py_get_attrs`, we can't use try_fold because of the extra Err
                     // so we have to loop manually
-                    let mut v = obj;
+                    let mut v = obj.clone();
                     for loc in path.iter() {
-                        v = match loc.py_get_attrs(v) {
+                        v = match loc.py_get_attrs(&v) {
                             Ok(Some(v)) => v,
                             Ok(None) => {
                                 continue 'outer;
@@ -446,7 +446,7 @@ impl PathItem {
         }
     }
 
-    pub fn py_get_item<'a>(&self, py_any: &'a PyAny) -> Option<&'a PyAny> {
+    pub fn py_get_item<'py>(&self, py_any: &Py2<'py, PyAny>) -> Option<Py2<'py, PyAny>> {
         // we definitely don't want to index strings, so explicitly omit this case
         if py_any.downcast::<PyString>().is_ok() {
             None
@@ -463,7 +463,7 @@ impl PathItem {
         }
     }
 
-    pub fn py_get_attrs<'a>(&self, obj: &'a PyAny) -> PyResult<Option<&'a PyAny>> {
+    pub fn py_get_attrs<'py>(&self, obj: &Py2<'py, PyAny>) -> PyResult<Option<Py2<'py, PyAny>>> {
         match self {
             Self::S(_, py_key) => {
                 // if obj is a dict, we want to use get_item, not getattr
@@ -506,7 +506,7 @@ impl PathItem {
 
 /// wrapper around `getattr` that returns `Ok(None)` for attribute errors, but returns other errors
 /// We don't check `try_from_attributes` because that check was performed on the top level object before we got here
-fn py_get_attrs<'a>(obj: &'a PyAny, attr_name: &Py<PyString>) -> PyResult<Option<&'a PyAny>> {
+fn py_get_attrs<'py>(obj: &Py2<'py, PyAny>, attr_name: &Py<PyString>) -> PyResult<Option<Py2<'py, PyAny>>> {
     match obj.getattr(attr_name.extract::<&PyString>(obj.py())?) {
         Ok(attr) => Ok(Some(attr)),
         Err(err) => {

@@ -476,7 +476,7 @@ impl ValidationInfo {
             config: config.clone_ref(py),
             context: extra.context.map(Into::into),
             field_name,
-            data: extra.data.map(Into::into),
+            data: extra.data.as_ref().map(|data| data.clone().into()),
             mode: extra.input_type,
         }
     }

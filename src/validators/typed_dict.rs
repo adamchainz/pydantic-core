@@ -2,6 +2,7 @@ use std::ops::ControlFlow;
 
 use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::types::PyMapping;
 use pyo3::types::{PyDict, PyString};
 
 use ahash::AHashSet;
@@ -152,7 +153,7 @@ impl Validator for TypedDictValidator {
         let strict = state.strict_or(self.strict);
         let dict = input.validate_dict(strict)?;
 
-        let output_dict = PyDict::new(py);
+        let output_dict = PyDict::new2(py);
         let mut errors: Vec<ValLineError> = Vec::with_capacity(self.fields.len());
 
         // we only care about which keys have been used if we're iterating over the object for extra after
@@ -173,9 +174,9 @@ impl Validator for TypedDictValidator {
         }
 
         macro_rules! process {
-            ($dict:ident, $get_method:ident, $iter:ty $(,$kwargs:ident)?) => {{
+            ($dict:expr, $get_method:ident, $iter:ty $(,$kwargs:expr)?) => {{
                 match state.with_new_extra(Extra {
-                    data: Some(output_dict),
+                    data: Some(output_dict.clone()),
                     ..*state.extra()
                 }, |state| {
                     for field in &self.fields {
@@ -312,10 +313,25 @@ impl Validator for TypedDictValidator {
             }};
         }
         match dict {
-            GenericMapping::PyDict(d) => process!(d, py_get_dict_item, DictGenericIterator),
-            GenericMapping::PyMapping(d) => process!(d, py_get_mapping_item, MappingGenericIterator),
-            GenericMapping::StringMapping(d) => process!(d, py_get_string_mapping_item, StringMappingGenericIterator),
-            GenericMapping::PyGetAttr(d, kwargs) => process!(d, py_get_attr, AttributesGenericIterator, kwargs),
+            GenericMapping::PyDict(d) => {
+                process!(Py2::borrowed_from_gil_ref(&d), py_get_dict_item, DictGenericIterator);
+            }
+            GenericMapping::PyMapping(d) => process!(
+                unsafe { Py2::borrowed_from_gil_ref(&&**d).downcast_unchecked::<PyMapping>() },
+                py_get_mapping_item,
+                MappingGenericIterator
+            ),
+            GenericMapping::StringMapping(d) => process!(
+                Py2::borrowed_from_gil_ref(&d),
+                py_get_string_mapping_item,
+                StringMappingGenericIterator
+            ),
+            GenericMapping::PyGetAttr(d, kwargs) => process!(
+                Py2::borrowed_from_gil_ref(&d),
+                py_get_attr,
+                AttributesGenericIterator,
+                kwargs.as_ref().map(Py2::borrowed_from_gil_ref)
+            ),
             GenericMapping::JsonObject(d) => process!(d, json_get, JsonObjectGenericIterator),
         }
 

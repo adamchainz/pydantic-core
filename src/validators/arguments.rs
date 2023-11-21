@@ -7,7 +7,7 @@ use ahash::AHashSet;
 use crate::build_tools::py_schema_err;
 use crate::build_tools::schema_or_config_same;
 use crate::errors::{AsLocItem, ErrorTypeDefaults, ValError, ValLineError, ValResult};
-use crate::input::{GenericArguments, Input, ValidationMatch};
+use crate::input::{BorrowInput, GenericArguments, Input, ValidationMatch};
 use crate::lookup_key::LookupKey;
 
 use crate::tools::SchemaDict;
@@ -179,15 +179,15 @@ impl Validator for ArgumentsValidator {
                 // go through arguments getting the value from args or kwargs and validating it
                 for (index, parameter) in self.parameters.iter().enumerate() {
                     let mut pos_value = None;
-                    if let Some(args) = $args.args {
+                    if let Some(args) = &$args.args {
                         if parameter.positional {
                             pos_value = $get_macro!(args, index);
                         }
                     }
                     let mut kw_value = None;
-                    if let Some(kwargs) = $args.kwargs {
+                    if let Some(kwargs) = &$args.kwargs {
                         if let Some(ref lookup_key) = parameter.kw_lookup_key {
-                            if let Some((lookup_path, value)) = lookup_key.$get_method(kwargs)? {
+                            if let Some((lookup_path, value)) = lookup_key.$get_method(&kwargs)? {
                                 used_kwargs.insert(lookup_path.first_key());
                                 kw_value = Some((lookup_path, value));
                             }
@@ -198,12 +198,12 @@ impl Validator for ArgumentsValidator {
                         (Some(_), Some((_, kw_value))) => {
                             errors.push(ValLineError::new_with_loc(
                                 ErrorTypeDefaults::MultipleArgumentValues,
-                                kw_value,
+                                kw_value.borrow_input(),
                                 parameter.name.clone(),
                             ));
                         }
                         (Some(pos_value), None) => {
-                            match parameter.validator.validate(py, pos_value, state)
+                            match parameter.validator.validate(py, pos_value.borrow_input(), state)
                             {
                                 Ok(value) => output_args.push(value),
                                 Err(ValError::LineErrors(line_errors)) => {
@@ -213,7 +213,7 @@ impl Validator for ArgumentsValidator {
                             }
                         }
                         (None, Some((lookup_path, kw_value))) => {
-                            match parameter.validator.validate(py, kw_value, state)
+                            match parameter.validator.validate(py, kw_value.borrow_input(), state)
                             {
                                 Ok(value) => output_kwargs.set_item(parameter.kwarg_key.as_ref().unwrap(), value)?,
                                 Err(ValError::LineErrors(line_errors)) => {
@@ -255,7 +255,7 @@ impl Validator for ArgumentsValidator {
                     if len > self.positional_params_count {
                         if let Some(ref validator) = self.var_args_validator {
                             for (index, item) in $slice_macro!(args, self.positional_params_count, len).iter().enumerate() {
-                                match validator.validate(py, item, state) {
+                                match validator.validate(py, item.borrow_input(), state) {
                                     Ok(value) => output_args.push(value),
                                     Err(ValError::LineErrors(line_errors)) => {
                                         errors.extend(
@@ -271,7 +271,7 @@ impl Validator for ArgumentsValidator {
                             for (index, item) in $slice_macro!(args, self.positional_params_count, len).iter().enumerate() {
                                 errors.push(ValLineError::new_with_loc(
                                     ErrorTypeDefaults::UnexpectedPositionalArgument,
-                                    item,
+                                    item.borrow_input(),
                                     index + self.positional_params_count,
                                 ));
                             }
@@ -282,6 +282,9 @@ impl Validator for ArgumentsValidator {
                 if let Some(kwargs) = $args.kwargs {
                     if kwargs.len() > used_kwargs.len() {
                         for (raw_key, value) in kwargs.iter() {
+                            // FIXME workaround for Py2 not having input yet
+                            let raw_key = raw_key.borrow_input();
+                            let value = value.borrow_input();
                             let either_str = match raw_key.validate_str(true, false).map(ValidationMatch::into_inner) {
                                 Ok(k) => k,
                                 Err(ValError::LineErrors(line_errors)) => {

@@ -399,7 +399,7 @@ impl Validator for TaggedUnionValidator {
         match self.discriminator {
             Discriminator::LookupKey(ref lookup_key) => {
                 macro_rules! find_validator {
-                    ($get_method:ident, $($dict:ident),+) => {{
+                    ($get_method:ident, $($dict:expr),+) => {{
                         // note all these methods return PyResult<Option<(data, data)>>, the outer Err is just for
                         // errors when getting attributes which should be "raised"
                         match lookup_key.$get_method($( $dict ),+)? {
@@ -413,10 +413,24 @@ impl Validator for TaggedUnionValidator {
                 let from_attributes = state.extra().from_attributes.unwrap_or(self.from_attributes);
                 let dict = input.validate_model_fields(self.strict, from_attributes)?;
                 let tag = match dict {
-                    GenericMapping::PyDict(dict) => find_validator!(py_get_dict_item, dict),
-                    GenericMapping::PyMapping(mapping) => find_validator!(py_get_mapping_item, mapping),
-                    GenericMapping::StringMapping(d) => find_validator!(py_get_dict_item, d),
-                    GenericMapping::PyGetAttr(obj, kwargs) => find_validator!(py_get_attr, obj, kwargs),
+                    GenericMapping::PyDict(dict) => {
+                        find_validator!(py_get_dict_item, Py2::borrowed_from_gil_ref(&dict))
+                    }
+                    GenericMapping::PyMapping(mapping) => {
+                        find_validator!(py_get_mapping_item, unsafe {
+                            Py2::<PyAny>::borrowed_from_gil_ref(&&**mapping).downcast_unchecked()
+                        })
+                    }
+                    GenericMapping::StringMapping(d) => {
+                        find_validator!(py_get_dict_item, Py2::borrowed_from_gil_ref(&d))
+                    }
+                    GenericMapping::PyGetAttr(obj, kwargs) => {
+                        find_validator!(
+                            py_get_attr,
+                            Py2::borrowed_from_gil_ref(&obj),
+                            kwargs.as_ref().map(Py2::borrowed_from_gil_ref)
+                        )
+                    }
                     GenericMapping::JsonObject(mapping) => find_validator!(json_get, mapping),
                 }?;
                 self.find_call_validator(py, tag, input, state)

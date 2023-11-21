@@ -1,6 +1,5 @@
 use std::ptr::null_mut;
 
-use pyo3::conversion::AsPyPointer;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PySet, PyString, PyTuple, PyType};
@@ -230,9 +229,9 @@ impl ModelValidator {
 
         if self.root_model {
             let fields_set = if input.to_object(py).is(&PydanticUndefinedType::py_undefined()) {
-                PySet::empty(py)?
+                PySet::empty2(py)?
             } else {
-                PySet::new(py, [&String::from(ROOT_FIELD)])?
+                PySet::new2(py, [&String::from(ROOT_FIELD)])?
             };
             force_setattr(py, self_instance, intern!(py, DUNDER_FIELDS_SET_KEY), fields_set)?;
             force_setattr(py, self_instance, intern!(py, ROOT_FIELD), output.as_ref(py))?;
@@ -271,9 +270,9 @@ impl ModelValidator {
 
         if self.root_model {
             let fields_set = if input.to_object(py).is(&PydanticUndefinedType::py_undefined()) {
-                PySet::empty(py)?
+                PySet::empty2(py)?
             } else {
-                PySet::new(py, [&String::from(ROOT_FIELD)])?
+                PySet::new2(py, [&String::from(ROOT_FIELD)])?
             };
             force_setattr(py, instance_ref, intern!(py, DUNDER_FIELDS_SET_KEY), fields_set)?;
             force_setattr(py, instance_ref, intern!(py, ROOT_FIELD), output)?;
@@ -305,7 +304,7 @@ impl ModelValidator {
 /// https://github.com/PyO3/pyo3/blob/d2caa056e9aacc46374139ef491d112cb8af1a25/src/pyclass_init.rs#L35-L77
 pub(super) fn create_class(class: &PyType) -> PyResult<PyObject> {
     let py = class.py();
-    let args = PyTuple::empty(py);
+    let args = PyTuple::empty2(py);
     let raw_type = class.as_type_ptr();
     unsafe {
         // Safety: raw_type is known to be a non-null type object pointer

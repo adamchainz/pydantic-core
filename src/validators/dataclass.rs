@@ -147,7 +147,7 @@ impl Validator for DataclassArgsValidator {
     ) -> ValResult<PyObject> {
         let args = input.validate_dataclass_args(&self.dataclass_name)?;
 
-        let output_dict = PyDict::new(py);
+        let output_dict = PyDict::new2(py);
         let mut init_only_args = self.init_only_count.map(Vec::with_capacity);
 
         let mut errors: Vec<ValLineError> = Vec::new();
@@ -155,7 +155,7 @@ impl Validator for DataclassArgsValidator {
 
         state.with_new_extra(
             Extra {
-                data: Some(output_dict),
+                data: Some(output_dict.clone()),
                 ..*state.extra()
             },
             |state| {
@@ -177,15 +177,15 @@ impl Validator for DataclassArgsValidator {
                         // go through fields getting the value from args or kwargs and validating it
                         for (index, field) in self.fields.iter().enumerate() {
                             let mut pos_value = None;
-                            if let Some(args) = $args.args {
+                            if let Some(args) = &$args.args {
                                 if !field.kw_only {
                                     pos_value = $get_macro!(args, index);
                                 }
                             }
 
                             let mut kw_value = None;
-                            if let Some(kwargs) = $args.kwargs {
-                                if let Some((lookup_path, value)) = field.lookup_key.$get_method(kwargs)? {
+                            if let Some(kwargs) = &$args.kwargs {
+                                if let Some((lookup_path, value)) = field.lookup_key.$get_method(&kwargs)? {
                                     used_keys.insert(lookup_path.first_key());
                                     kw_value = Some((lookup_path, value));
                                 }
@@ -206,7 +206,7 @@ impl Validator for DataclassArgsValidator {
                                     );
                                 }
                                 // found a positional argument, validate it
-                                (Some(pos_value), None) => match field.validator.validate(py, pos_value, state) {
+                                (Some(pos_value), None) => match field.validator.validate(py, pos_value.borrow_input(), state) {
                                     Ok(value) => set_item!(field, value),
                                     Err(ValError::LineErrors(line_errors)) => {
                                         errors.extend(
@@ -271,7 +271,7 @@ impl Validator for DataclassArgsValidator {
                                 {
                                     errors.push(ValLineError::new_with_loc(
                                         ErrorTypeDefaults::UnexpectedPositionalArgument,
-                                        item,
+                                        item.borrow_input(),
                                         index + self.positional_count,
                                     ));
                                 }
@@ -281,6 +281,9 @@ impl Validator for DataclassArgsValidator {
                         if let Some(kwargs) = $args.kwargs {
                             if kwargs.len() != used_keys.len() {
                                 for (raw_key, value) in kwargs.iter() {
+                                    // FIXME workaround for Py2 not having input yet
+                                    let raw_key = raw_key.borrow_input();
+                                    let value = value.borrow_input();
                                     match raw_key.validate_str(true, false).map(ValidationMatch::into_inner) {
                                         Ok(either_str) => {
                                             if !used_keys.contains(either_str.as_cow()?.as_ref()) {
@@ -340,13 +343,13 @@ impl Validator for DataclassArgsValidator {
                         // StringMapping cannot pass positional args, so wrap the PyDict
                         // in a type with guaranteed empty args array for sake of the process
                         // macro
-                        struct StringMappingArgs<'a> {
-                            args: Option<&'a PyTuple>,
-                            kwargs: Option<&'a PyDict>,
+                        struct StringMappingArgs<'py> {
+                            args: Option<Py2<'py, PyTuple>>,
+                            kwargs: Option<Py2<'py, PyDict>>,
                         }
                         let a = StringMappingArgs {
                             args: None,
-                            kwargs: Some(a),
+                            kwargs: Some(Py2::borrowed_from_gil_ref(&a).clone()),
                         };
                         process!(a, py_get_string_mapping_item, py_get, py_slice);
                     }
@@ -373,7 +376,7 @@ impl Validator for DataclassArgsValidator {
         field_value: &'data PyAny,
         state: &mut ValidationState,
     ) -> ValResult<PyObject> {
-        let dict: &PyDict = obj.downcast()?;
+        let dict = Py2::borrowed_from_gil_ref(&obj).downcast::<PyDict>()?;
 
         let ok = |output: PyObject| {
             dict.set_item(field_name, output)?;
@@ -402,7 +405,7 @@ impl Validator for DataclassArgsValidator {
             }
             match state.with_new_extra(
                 Extra {
-                    data: Some(data_dict),
+                    data: Some(data_dict.clone()),
                     ..*state.extra()
                 },
                 |state| field.validator.validate(py, field_value, state),

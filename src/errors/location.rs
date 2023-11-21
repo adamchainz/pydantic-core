@@ -128,7 +128,7 @@ impl ToPyObject for Location {
         match self {
             Self::List(loc) => PyTuple::new(py, loc.iter().rev()).to_object(py),
             Self::Empty => EMPTY_TUPLE
-                .get_or_init(py, || PyTuple::empty(py).to_object(py))
+                .get_or_init(py, || PyTuple::empty2(py).to_object(py))
                 .clone_ref(py),
         }
     }
